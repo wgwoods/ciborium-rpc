@@ -8,7 +8,8 @@ pub struct Transport<C: Read + Write> {
 }
 
 impl<C> Transport<C>
-where C: Read + Write
+where
+    C: Read + Write,
 {
     pub fn new(channel: C) -> Self {
         Self { channel }
@@ -20,17 +21,19 @@ pub struct BufTransport<B: Buf + BufMut> {
 }
 
 impl<B> BufTransport<B>
-where B: Buf + BufMut {
+where
+    B: Buf + BufMut,
+{
     pub fn new(buffer: B) -> Self {
         Self { buffer }
     }
 }
 
 pub mod cbor {
-    use crate::proto::Value;
+    use super::{Buf, BufMut, BufTransport, Read, Transport, Write};
     use crate::error::TransportError;
+    use crate::proto::Value;
     use std::error::Error;
-    use super::{Read, Write, Buf, BufMut, Transport, BufTransport};
 
     pub trait CBORTransport {
         type Error: Error;
@@ -53,7 +56,10 @@ pub mod cbor {
         type Error = TransportError;
         type SendResult = ();
         fn send_cbor(&mut self, value: Value) -> Result<Self::SendResult, Self::Error> {
-            Ok(ciborium::ser::into_writer(&value, (&mut self.buffer).writer())?)
+            Ok(ciborium::ser::into_writer(
+                &value,
+                (&mut self.buffer).writer(),
+            )?)
         }
         fn read_cbor(&mut self) -> Result<Value, Self::Error> {
             Ok(ciborium::de::from_reader((&mut self.buffer).reader())?)
@@ -82,8 +88,8 @@ pub mod simple {
 
 #[cfg(test)]
 mod tests {
-    use super::{Transport, BufTransport};
     use super::cbor::CBORTransport;
+    use super::{BufTransport, Transport};
     use crate::proto::Value;
     #[cfg(unix)]
     #[test]
@@ -92,7 +98,7 @@ mod tests {
         let (s1, s2) = UnixStream::pair().unwrap();
         let mut c_tr = Transport::new(s1);
         let mut s_tr = Transport::new(s2);
-        let v = Value::from(vec![1,2,5]);
+        let v = Value::from(vec![1, 2, 5]);
         c_tr.send_cbor(v.clone()).unwrap();
         assert_eq!(s_tr.read_cbor().unwrap(), v);
     }
@@ -104,7 +110,10 @@ mod tests {
         let str_vec = vec!["one", "two", "three"];
         let v = Value::Array(str_vec.iter().map(|s| Value::from(s.to_string())).collect());
         tr.send_cbor(v.clone()).unwrap();
-        assert_eq!(tr.buffer.len(), str_vec.iter().map(|s| s.len()+1).sum::<usize>() + 1);
+        assert_eq!(
+            tr.buffer.len(),
+            str_vec.iter().map(|s| s.len() + 1).sum::<usize>() + 1
+        );
         assert_eq!(tr.read_cbor().unwrap(), v);
     }
 }

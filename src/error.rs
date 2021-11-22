@@ -36,7 +36,8 @@ pub enum TransportError {
 }
 
 impl<E> From<ciborium::ser::Error<E>> for TransportError
-where TransportError: From<E>
+where
+    TransportError: From<E>,
 {
     fn from(err: ciborium::ser::Error<E>) -> Self {
         use ciborium::ser::Error::*;
@@ -47,8 +48,9 @@ where TransportError: From<E>
     }
 }
 
-impl <E> From<ciborium::de::Error<E>> for TransportError
-where TransportError: From<E>
+impl<E> From<ciborium::de::Error<E>> for TransportError
+where
+    TransportError: From<E>,
 {
     fn from(err: ciborium::de::Error<E>) -> Self {
         use ciborium::de::Error::*;
@@ -56,11 +58,13 @@ where TransportError: From<E>
             Io(e) => TransportError::from(e),
             Semantic(pos, msg) => TransportError::Decode { msg, pos },
             Syntax(pos) => TransportError::Decode {
-                msg: "syntax error".into(), pos: Some(pos)
+                msg: "syntax error".into(),
+                pos: Some(pos),
             },
             RecursionLimitExceeded => TransportError::Decode {
-                msg: "recursion limit exceeded".into(), pos: None
-            }
+                msg: "recursion limit exceeded".into(),
+                pos: None,
+            },
         }
     }
 }

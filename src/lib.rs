@@ -23,14 +23,12 @@
 //! [JSON-RPC]: https://www.jsonrpc.org/
 //! [JSON-RPC 2.0]: https://www.jsonrpc.org/specification
 
-
+pub mod error;
 pub mod proto;
 pub mod transport;
-pub mod error;
 
 // TODO
 //mod client;
 
 // TODO
 //mod server;
-

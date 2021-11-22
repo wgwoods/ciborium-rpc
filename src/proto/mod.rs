@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// Defines the protocol's message types and their contents.
-
 use std::convert::TryFrom;
 
 #[cfg(feature = "serde1")]
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "serde1")]
 pub mod v0;
@@ -24,7 +23,6 @@ pub use ciborium::value::Value;
 
 /// A Request consists of the MethodID (a string or integer), the Params to
 /// pass to that method, and an optional RequestID.
-/// This is usually built by a RequestBuilder.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde1", derive(Serialize, Deserialize))]
 pub struct Request {
@@ -91,7 +89,7 @@ pub enum Params {
 pub struct ErrorValue {
     code: i64,
     message: String,
-    #[cfg_attr(feature = "serde1", serde(skip_serializing_if="Option::is_none"))]
+    #[cfg_attr(feature = "serde1", serde(skip_serializing_if = "Option::is_none"))]
     data: Option<Value>,
 }
 
@@ -185,7 +183,7 @@ impl TryFrom<Value> for MethodID {
                 Err(_) => Err(Self::Error::InvalidMethodID),
             },
             Value::Text(s) => Ok(s.into()),
-            _ => Err(Self::Error::InvalidMethodID)
+            _ => Err(Self::Error::InvalidMethodID),
         }
     }
 }
@@ -256,4 +254,3 @@ implfrom! {
 
     Vec<u8> => RequestID::Binary,
 }
-

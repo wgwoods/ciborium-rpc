@@ -1,85 +1,147 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// This implementation of the v0 protocol uses serde.
-#![cfg(feature = "serde1")]
-
-/// proto::v0 - work-in-progress / experimental version of the ciborium-rpc
-/// protocol.
-///
-
-
-
-use serde::{Deserialize, Serialize};
+//! Experimental/draft version 0 of the ciborium-rpc protocol.
+//!
+//! The v0 message format works like this:
+//!
+//! 1. Every RPC message is tagged with a magic number ([TAG_ID_RPCV0]) that
+//!    identifies it as a ciborium-rpc message.
+//!
+//! 2. Each message is either a Request or a Response. Both are represented as
+//!    CBOR Maps with Text keys.
+//!
+//! 3. A Request has the following keys and values:
+//!     ```json
+//!     {"fn": MethodID, "args": Params, "id": RequestID}
+//!     ```
+//!     The `args` and `id` items may be omitted.
+//!
+//! 4. A Response is a Map with one of two forms:
+//!     ```json
+//!     {"ok": Value, "id": RequestID}
+//!     ```
+//!     ```json
+//!     {"err": ErrorValue, "id": RequestID}`
+//!     ```
+//!     The `id` item MUST be present, and MUST contain the same value as the
+//!     `id` of the corresponding Request.
+//!
+//! 5. An ErrorValue is a Map with the form:
+//!     ```json
+//!     {"code": i32, "message": String, "data": Value}
+//!     ```
+//!     The `data` item is optional and may be omitted.
+//!
 
 use ciborium::tag::Required;
 use std::convert::{TryFrom, TryInto};
 
-use super::{ErrorValue, MethodID, Params, RequestID, Value, Request, Response};
+use super::{ErrorValue, MethodID, Params, Request, RequestID, Response, Value};
 use crate::error::{ProtocolError, TransportError};
 use crate::transport::simple::{ClientTransport, ServerTransport};
 use crate::transport::{Buf, BufMut, Read, Write};
 use crate::transport::{BufTransport, Transport};
 
-// ----- RPC format / framing -------------------------------------------------
+/// Magic number / tag ID to identify RPC V0 requests
+pub const TAG_ID_RPCV0: u64 = 4036988077;
 
+// Here's our serde-based implementation of the v0 protocol.
+//
 // We define a single RPCMsg type, which implements Serialize and Deserialize,
 // and then we implement ClientTransport/ServerTransport in terms of
 // serializing/deserializing to/from RPCMsg.
+#[cfg(feature = "serde1")]
+mod serde_v0 {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+    // ----- RPC format / framing -------------------------------------------------
 
-/// RPCMsg is the toplevel type for this version of the protocol.
-///
-/// Every RPC message is tagged with CBOR tag [TAG_ID_RPCV0] so we can identify
-/// it as an RPC message. It then contains either a Request or a Response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RPCMsg(Required<Msg, TAG_ID_RPCV0>);
+    /// RPCMsg is the toplevel type for this version of the protocol.
+    ///
+    /// Every RPC message is tagged with CBOR tag [TAG_ID_RPCV0] so we can identify
+    /// it as an RPC message. It then contains either a Request or a Response.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct RPCMsg(Required<Msg, TAG_ID_RPCV0>);
 
-/// Magic number / tag ID to identify RPC V0 requests
-const TAG_ID_RPCV0: u64 = 4036988077;
+    /// The Msg enum encapsulates all well-formatted RPC message contents.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Msg {
+        Request(#[serde(with = "RequestMsg")] crate::proto::Request),
+        Response(#[serde(with = "ResponseMsg")] crate::proto::Response),
+    }
 
+    /// This defines how we serialize/deserialize the Request struct.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(remote = "crate::proto::Request")]
+    struct RequestMsg {
+        #[serde(rename = "fn")]
+        method: MethodID,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "args")]
+        params: Option<Params>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "id")]
+        req_id: Option<RequestID>,
+    }
 
-/// The Msg enum encapsulates all well-formatted RPC message contents.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-enum Msg {
-    Request(#[serde(with = "RequestMsg")] crate::proto::Request),
-    Response(#[serde(with = "ResponseMsg")] crate::proto::Response),
+    /// This defines how we serialize/deserialize the Result inside a Response.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(remote = "core::result::Result")]
+    enum ResultMsg<T, E> {
+        #[serde(rename = "ok")]
+        Ok(T),
+        #[serde(rename = "err")]
+        Err(E),
+    }
+
+    /// This is how we serialize/deserialize the Response struct.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(remote = "crate::proto::Response")]
+    struct ResponseMsg {
+        #[serde(flatten, with = "ResultMsg")]
+        result: Result<Value, ErrorValue>,
+        #[serde(rename = "id")]
+        req_id: RequestID,
+    }
+
+    // ----- Conversions to/from RPCMsg -------------------------------------------
+
+    impl From<Request> for RPCMsg {
+        fn from(r: Request) -> Self {
+            RPCMsg(Required(Msg::Request(r)))
+        }
+    }
+
+    impl From<Response> for RPCMsg {
+        fn from(r: Response) -> Self {
+            RPCMsg(Required(Msg::Response(r)))
+        }
+    }
+
+    impl TryFrom<RPCMsg> for Request {
+        type Error = ProtocolError;
+        fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
+            match msg.0 .0 {
+                Msg::Request(r) => Ok(r),
+                Msg::Response(_) => Err(ProtocolError::UnexpectedMessage),
+            }
+        }
+    }
+
+    impl TryFrom<RPCMsg> for Response {
+        type Error = ProtocolError;
+        fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
+            match msg.0 .0 {
+                Msg::Request(_) => Err(ProtocolError::UnexpectedMessage),
+                Msg::Response(r) => Ok(r),
+            }
+        }
+    }
 }
 
-/// This defines how we serialize/deserialize the Request struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(remote = "crate::proto::Request")]
-struct RequestMsg {
-    #[serde(rename = "fn")]
-    method: MethodID,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "args")]
-    params: Option<Params>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "id")]
-    req_id: Option<RequestID>,
-}
-
-/// This defines how we serialize/deserialize the Result inside a Response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(remote = "core::result::Result")]
-enum ResultMsg<T, E> {
-    #[serde(rename = "ok")]
-    Ok(T),
-    #[serde(rename = "err")]
-    Err(E),
-}
-
-/// This is how we serialize/deserialize the Response struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(remote = "crate::proto::Response")]
-struct ResponseMsg {
-    #[serde(flatten, with = "ResultMsg")]
-    result: Result<Value, ErrorValue>,
-    #[serde(rename = "id")]
-    req_id: RequestID,
-}
-
-// ----- Conversions to/from RPCMsg -------------------------------------------
+#[cfg(feature = "serde1")]
+use serde_v0::RPCMsg;
 
 impl RPCMsg {
     fn from_reader(reader: &mut impl Read) -> Result<Self, TransportError> {
@@ -96,40 +158,8 @@ impl RPCMsg {
     }
 }
 
-impl From<Request> for RPCMsg {
-    fn from(r: Request) -> Self {
-        RPCMsg(Required(Msg::Request(r)))
-    }
-}
-
-impl From<Response> for RPCMsg {
-    fn from(r: Response) -> Self {
-        RPCMsg(Required(Msg::Response(r)))
-    }
-}
-
-impl TryFrom<RPCMsg> for Request {
-    type Error = ProtocolError;
-    fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
-        match msg.0 .0 {
-            Msg::Request(r) => Ok(r),
-            Msg::Response(_) => Err(ProtocolError::UnexpectedMessage),
-        }
-    }
-}
-
-impl TryFrom<RPCMsg> for Response {
-    type Error = ProtocolError;
-    fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
-        match msg.0 .0 {
-            Msg::Request(_) => Err(ProtocolError::UnexpectedMessage),
-            Msg::Response(r) => Ok(r),
-        }
-    }
-}
-
-// Here we implement ClientTransport/ServerTransport using the stuff above, so
-// our generic Transport<C> and BufTransport<B> can transport RPCMsg items.
+// Now we implement ClientTransport/ServerTransport so Transport<C> and
+// BufTransport<B> can transport RPCMsg items.
 
 impl<C: Read + Write> ClientTransport for Transport<C> {
     type Error = TransportError;
@@ -177,11 +207,11 @@ impl<B: Buf + BufMut> ServerTransport for BufTransport<B> {
 
 #[cfg(test)]
 mod tests {
-    use crate::transport::simple::{ClientTransport, ServerTransport};
-    use crate::transport::cbor::CBORTransport;
-    use crate::transport::BufTransport;
     use super::{Request, Response};
     use crate::proto::{ErrorValue, Params, Value};
+    use crate::transport::cbor::CBORTransport;
+    use crate::transport::simple::{ClientTransport, ServerTransport};
+    use crate::transport::BufTransport;
     use bytes::BytesMut;
 
     macro_rules! params {
