@@ -10,7 +10,7 @@ default = ["serde1"]
 serde1 = ["serde"]
 
 [dependencies]
-ciborium = { path = "../ciborium/ciborium" }
+ciborium = { version = "0.2" }
 bytes = "1"
 futures = "0.3"
 thiserror = "1.0"
