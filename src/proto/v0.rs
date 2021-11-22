@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// We're using serde to define a single RPCMsg type and then implement
-// ClientTransport/ServerTransport in terms of serializing/deserializing
-// to/from RPCMsg.
+// This implementation of the v0 protocol uses serde.
 #![cfg(feature = "serde1")]
+
+/// proto::v0 - work-in-progress / experimental version of the ciborium-rpc
+/// protocol.
+///
+
+
+
 use serde::{Deserialize, Serialize};
 
 use ciborium::tag::Required;
@@ -15,8 +20,30 @@ use crate::transport::simple::{ClientTransport, ServerTransport};
 use crate::transport::{Buf, BufMut, Read, Write};
 use crate::transport::{BufTransport, Transport};
 
-// An arbitrary magic number / tag ID to identify RPC V0 requests
-const RPCV0: u64 = 4036988077;
+// ----- RPC format / framing -------------------------------------------------
+
+// We define a single RPCMsg type, which implements Serialize and Deserialize,
+// and then we implement ClientTransport/ServerTransport in terms of
+// serializing/deserializing to/from RPCMsg.
+
+/// RPCMsg is the toplevel type for this version of the protocol.
+///
+/// Every RPC message is tagged with CBOR tag [TAG_ID_RPCV0] so we can identify
+/// it as an RPC message. It then contains either a Request or a Response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCMsg(Required<Msg, TAG_ID_RPCV0>);
+
+/// Magic number / tag ID to identify RPC V0 requests
+const TAG_ID_RPCV0: u64 = 4036988077;
+
+
+/// The Msg enum encapsulates all well-formatted RPC message contents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Msg {
+    Request(#[serde(with = "RequestMsg")] crate::proto::Request),
+    Response(#[serde(with = "ResponseMsg")] crate::proto::Response),
+}
 
 /// This defines how we serialize/deserialize the Request struct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,22 +79,8 @@ struct ResponseMsg {
     req_id: RequestID,
 }
 
-/// The Msg enum encapsulates all well-formatted RPC message contents.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-enum Msg {
-    Request(#[serde(with = "RequestMsg")] crate::proto::Request),
-    Response(#[serde(with = "ResponseMsg")] crate::proto::Response),
-}
+// ----- Conversions to/from RPCMsg -------------------------------------------
 
-/// RPCMsg is the toplevel type for this version of the protocol.
-///
-/// Every RPC message is tagged with CBOR tag [RPCV0] so we can identify it,
-/// and then contains either a Request or a Response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RPCMsg(Required<Msg, RPCV0>);
-
-//
 impl RPCMsg {
     fn from_reader(reader: &mut impl Read) -> Result<Self, TransportError> {
         Ok(ciborium::de::from_reader(reader)?)
@@ -83,18 +96,18 @@ impl RPCMsg {
     }
 }
 
-// ----- Conversions to/from RPCMsg
-
 impl From<Request> for RPCMsg {
     fn from(r: Request) -> Self {
         RPCMsg(Required(Msg::Request(r)))
     }
 }
+
 impl From<Response> for RPCMsg {
     fn from(r: Response) -> Self {
         RPCMsg(Required(Msg::Response(r)))
     }
 }
+
 impl TryFrom<RPCMsg> for Request {
     type Error = ProtocolError;
     fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
@@ -104,6 +117,7 @@ impl TryFrom<RPCMsg> for Request {
         }
     }
 }
+
 impl TryFrom<RPCMsg> for Response {
     type Error = ProtocolError;
     fn try_from(msg: RPCMsg) -> Result<Self, Self::Error> {
@@ -127,6 +141,7 @@ impl<C: Read + Write> ClientTransport for Transport<C> {
         Ok(RPCMsg::from(request).into_writer(&mut self.channel)?)
     }
 }
+
 impl<C: Read + Write> ServerTransport for Transport<C> {
     type Error = TransportError;
     type SendResult = ();
@@ -137,6 +152,7 @@ impl<C: Read + Write> ServerTransport for Transport<C> {
         Ok(RPCMsg::from(response).into_writer(&mut self.channel)?)
     }
 }
+
 impl<B: Buf + BufMut> ClientTransport for BufTransport<B> {
     type Error = TransportError;
     type SendResult = ();
@@ -147,6 +163,7 @@ impl<B: Buf + BufMut> ClientTransport for BufTransport<B> {
         Ok(RPCMsg::from(request).into_buf_mut(&mut self.buffer)?)
     }
 }
+
 impl<B: Buf + BufMut> ServerTransport for BufTransport<B> {
     type Error = TransportError;
     type SendResult = ();
@@ -166,6 +183,7 @@ mod tests {
     use super::{Request, Response};
     use crate::proto::{ErrorValue, Params, Value};
     use bytes::BytesMut;
+
     macro_rules! params {
         ($($v:expr),+ $(,)?) => {
             Params::Array(vec![$(
@@ -174,6 +192,7 @@ mod tests {
             ])
         };
     }
+
     #[test]
     fn encode_request() {
         let mut tr = BufTransport::new(BytesMut::with_capacity(4096));
@@ -198,6 +217,7 @@ mod tests {
         println!("req: {:?}", req2);
         assert_eq!(req, req2);
     }
+
     #[test]
     fn encode_response() {
         let mut tr = BufTransport::new(BytesMut::with_capacity(4096));

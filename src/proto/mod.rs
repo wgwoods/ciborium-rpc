@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-/// Defines the protocol's message types and their contents, and how to
-/// read and write those messages over
+/// Defines the protocol's message types and their contents.
 
 use std::convert::TryFrom;
 
